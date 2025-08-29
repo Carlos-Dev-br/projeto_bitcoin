@@ -4,11 +4,15 @@ from sqlalchemy import create_engine, Column, String, Float, Integer, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from time import sleep
+from dotenv import load_dotenv
+import os
 
-#Configurações do banco de dados
-DATABASE_URL = "postgresql://dbname_rfmr_user:umbipbO7aaO9xEyFqnq92lhttXrkEEdl@dpg-d2og7mffte5s738963kg-a.oregon-postgres.render.com/dbname_rfmr"
+load_dotenv()
 
-#Criação do engine e sessão
+# Configurações do banco de dados
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Criação do engine e sessão
 engine = create_engine(DATABASE_URL)
 Session = sessionmaker(bind=engine)
 Base = declarative_base()
@@ -23,43 +27,66 @@ class BitcoinDados(Base):
     moeda = Column(String(10))
     timestamp = Column(DateTime)
 
+# Criar a tabela no banco de dados
+Base.metadata.create_all(engine)
+
 def extrair():
     url = "https://api.coinbase.com/v2/prices/spot"
     response = requests.get(url)
+    response.raise_for_status()  # Verifica se a requisição foi bem-sucedida
     return response.json()
 
 def transformar(dados):
-    valor = float (dados['data']['amount'])
+    valor = float(dados['data']['amount'])
     criptomoeda = dados['data']['base']
     moeda = dados['data']['currency']
+    timestamp = datetime.now()
     
-    dados_tratados = { 
-      "valor": valor, 
-      "criptomoeda": criptomoeda,
-      "moeda": moeda, 
-      "timestamp": datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-      }
-    return dados_tratados
+    # Dados para SQLAlchemy (com timestamp como objeto datetime)
+    dados_sqlalchemy = {
+        "valor": valor,
+        "criptomoeda": criptomoeda,
+        "moeda": moeda,
+        "timestamp": timestamp
+    }
+    
+    # Dados para TinyDB (com timestamp como string)
+    dados_tinydb = {
+        "valor": valor,
+        "criptomoeda": criptomoeda,
+        "moeda": moeda,
+        "timestamp": timestamp.strftime("%d/%m/%Y, %H:%M:%S")
+    }
+    
+    return dados_sqlalchemy, dados_tinydb
 
 def salvar_dados_sqlalchemy(dados):
     """Salva os dados no PostgreSQL usando SQLAlchemy."""
     with Session() as session:
-        session.add(dados)
+        novo_dado = BitcoinDados(
+            valor=dados['valor'],
+            criptomoeda=dados['criptomoeda'],
+            moeda=dados['moeda'],
+            timestamp=dados['timestamp']
+        )
+        session.add(novo_dado)
         session.commit()
         print("Dados salvos no PostgreSQL!")
 
-def load(dados_tratados):
+def load(dados_tinydb):
+    """Salva os dados no TinyDB."""
     db = TinyDB('db.json')
-    db.insert(dados_tratados)
-    print("Dados salvos com sucesso!")
-
+    db.insert(dados_tinydb)
+    print("Dados salvos no TinyDB!")
 
 if __name__ == "__main__":
-    while True: 
-        dados_extraidos = extrair()
-        tratados = transformar(dados_extraidos)
-        load(tratados)
-        sleep(5)
-    
-    
-    
+    while True:
+        try:
+            dados_extraidos = extrair()
+            dados_sqlalchemy, dados_tinydb = transformar(dados_extraidos)
+            load(dados_tinydb)  # Salva no TinyDB
+            salvar_dados_sqlalchemy(dados_sqlalchemy)  # Salva no PostgreSQL
+            sleep(5)
+        except Exception as e:
+            print(f"Erro: {e}")
+            sleep(5)
